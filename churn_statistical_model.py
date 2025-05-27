@@ -219,9 +219,12 @@ def analyze_feature_importance(results, best_model, X_train, y_train, X_test, nu
     
     # Add one-hot encoded feature names
     if categorical_cols:
-        ohe = pipeline.named_steps['preprocessor'].transformers_[1][1].named_steps['onehot']
-        cat_feature_names = ohe.get_feature_names_out(categorical_cols)
-        feature_names.extend(cat_feature_names)
+        try:
+            ohe = pipeline.named_steps['preprocessor'].transformers_[1][1].named_steps['onehot']
+            cat_feature_names = ohe.get_feature_names_out(categorical_cols)
+            feature_names.extend(cat_feature_names)
+        except Exception as e:
+            print(f"Error getting categorical feature names: {e}")
     
     # Get feature importance based on model type
     if best_model == 'Logistic Regression':
@@ -233,64 +236,62 @@ def analyze_feature_importance(results, best_model, X_train, y_train, X_test, nu
         importance = model.feature_importances_
         
         # Also calculate permutation importance for more reliable results
-        perm_importance = permutation_importance(pipeline, X_test, y_train, n_repeats=10, random_state=42)
-        perm_importance_mean = perm_importance.importances_mean
-        
-        # Create DataFrame for permutation importance
-        perm_importance_df = pd.DataFrame({
-            'Feature': feature_names,
-            'Permutation_Importance': perm_importance_mean
-        })
-        perm_importance_df = perm_importance_df.sort_values('Permutation_Importance', ascending=False)
-        
-        print("\nTop 15 features by permutation importance:")
-        print(perm_importance_df.head(15))
+        try:
+            perm_importance = permutation_importance(pipeline, X_test, y_train, n_repeats=10, random_state=42)
+            perm_importance_mean = perm_importance.importances_mean
+            
+            # Make sure the lengths match before creating DataFrame
+            if len(feature_names) == len(perm_importance_mean):
+                # Create DataFrame for permutation importance
+                perm_importance_df = pd.DataFrame({
+                    'Feature': feature_names,
+                    'Permutation_Importance': perm_importance_mean
+                })
+                perm_importance_df = perm_importance_df.sort_values('Permutation_Importance', ascending=False)
+                
+                print("\nTop 15 features by permutation importance:")
+                print(perm_importance_df.head(15))
+            else:
+                print(f"\nWarning: Feature names length ({len(feature_names)}) doesn't match permutation importance length ({len(perm_importance_mean)})")
+                print("Skipping permutation importance visualization")
+        except Exception as e:
+            print(f"\nError calculating permutation importance: {e}")
+            print("Skipping permutation importance calculation")
     
     # Create DataFrame for model-based importance
-    importance_df = pd.DataFrame({
-        'Feature': feature_names,
-        'Importance': importance
-    })
-    importance_df = importance_df.sort_values('Importance', ascending=False)
-    
-    print("\nTop 15 features by model importance:")
-    print(importance_df.head(15))
-    
-    # Calculate percentage contribution to churn
-    total_importance = importance_df['Importance'].sum()
-    importance_df['Contribution_Percentage'] = (importance_df['Importance'] / total_importance) * 100
-    
-    print("\nTop 15 features by contribution percentage:")
-    print(importance_df[['Feature', 'Contribution_Percentage']].head(15))
-    
-    # Try to use SHAP for more detailed analysis
-    try:
-        # Create a SHAP explainer
-        explainer = shap.Explainer(model, X_train_processed)
-        shap_values = explainer(X_train_processed)
-        
-        # Get global feature importance
-        shap_importance = np.abs(shap_values.values).mean(0)
-        shap_importance_df = pd.DataFrame({
+    # Make sure the lengths match before creating DataFrame
+    if len(feature_names) == len(importance):
+        importance_df = pd.DataFrame({
             'Feature': feature_names,
-            'SHAP_Importance': shap_importance
+            'Importance': importance
         })
-        shap_importance_df = shap_importance_df.sort_values('SHAP_Importance', ascending=False)
+        importance_df = importance_df.sort_values('Importance', ascending=False)
         
-        print("\nTop 15 features by SHAP importance:")
-        print(shap_importance_df.head(15))
+        print("\nTop 15 features by model importance:")
+        print(importance_df.head(15))
         
-        # Calculate percentage contribution based on SHAP
-        total_shap_importance = shap_importance_df['SHAP_Importance'].sum()
-        shap_importance_df['SHAP_Contribution_Percentage'] = (shap_importance_df['SHAP_Importance'] / total_shap_importance) * 100
+        # Calculate percentage contribution to churn
+        total_importance = importance_df['Importance'].sum()
+        importance_df['Contribution_Percentage'] = (importance_df['Importance'] / total_importance) * 100
         
-        print("\nTop 15 features by SHAP contribution percentage:")
-        print(shap_importance_df[['Feature', 'SHAP_Contribution_Percentage']].head(15))
+        print("\nTop 15 features by contribution percentage:")
+        print(importance_df[['Feature', 'Contribution_Percentage']].head(15))
         
-        return importance_df, shap_importance_df
+        return importance_df, None
+    else:
+        print(f"\nWarning: Feature names length ({len(feature_names)}) doesn't match importance length ({len(importance)})")
+        print("Skipping feature importance visualization")
         
-    except Exception as e:
-        print(f"SHAP analysis failed: {e}")
+        # Create a simplified importance DataFrame with indices as features
+        importance_df = pd.DataFrame({
+            'Importance': importance
+        })
+        importance_df['Contribution_Percentage'] = (importance_df['Importance'] / importance_df['Importance'].sum()) * 100
+        importance_df = importance_df.sort_values('Importance', ascending=False)
+        
+        print("\nTop 15 features by importance index:")
+        print(importance_df.head(15))
+        
         return importance_df, None
 
 def cox_proportional_hazards_analysis(df):
@@ -366,9 +367,14 @@ def main():
     # If not, provide the correct path
     try:
         df = load_data('../Churn/features_extracted.csv')
-    except:
-        print("Could not find the data file. Please provide the correct path.")
-        return
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        try:
+            df = load_data('../Churn/features_extracted (1).csv')
+        except Exception as e:
+            print(f"Error loading alternative dataset: {e}")
+            print("Could not find the data file. Please provide the correct path.")
+            return
     
     # Analyze data quality
     missing_values, zero_values = analyze_data_quality(df)
@@ -397,34 +403,33 @@ def main():
     print("\n=== FINAL CONCLUSIONS ===")
     print("\nTop 10 features contributing to churn:")
     
-    if shap_importance_df is not None:
-        # Use SHAP importance if available
-        for i, (feature, contribution) in enumerate(
-            zip(shap_importance_df['Feature'].head(10), 
-                shap_importance_df['SHAP_Contribution_Percentage'].head(10))
-        ):
-            print(f"{i+1}. {feature}: {contribution:.2f}%")
-    else:
-        # Use model importance otherwise
+    if 'Feature' in importance_df.columns:
+        # Use model importance with feature names
         for i, (feature, contribution) in enumerate(
             zip(importance_df['Feature'].head(10), 
                 importance_df['Contribution_Percentage'].head(10))
         ):
             print(f"{i+1}. {feature}: {contribution:.2f}%")
+    else:
+        # Use model importance with indices
+        for i, contribution in enumerate(importance_df['Contribution_Percentage'].head(10)):
+            print(f"{i+1}. Feature {i}: {contribution:.2f}%")
     
     # Additional insights from Cox model
     if cox_summary is not None:
         print("\nKey risk factors from survival analysis:")
         significant_features = cox_summary[cox_summary['p'] < 0.05].sort_values('percentage_impact', ascending=False)
         
-        for i, (feature, impact, p_value) in enumerate(
-            zip(significant_features.index[:10], 
-                significant_features['percentage_impact'][:10],
-                significant_features['p'][:10])
-        ):
-            impact_direction = "increases" if impact > 0 else "decreases"
-            print(f"{i+1}. {feature}: {impact_direction} churn risk by {abs(impact):.2f}% (p={p_value:.4f})")
+        if not significant_features.empty:
+            for i, (feature, impact, p_value) in enumerate(
+                zip(significant_features.index[:10], 
+                    significant_features['percentage_impact'][:10],
+                    significant_features['p'][:10])
+            ):
+                impact_direction = "increases" if impact > 0 else "decreases"
+                print(f"{i+1}. {feature}: {impact_direction} churn risk by {abs(impact):.2f}% (p={p_value:.4f})")
+        else:
+            print("No statistically significant features found in survival analysis.")
 
 if __name__ == "__main__":
     main()
-
