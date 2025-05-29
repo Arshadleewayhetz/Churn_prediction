@@ -323,22 +323,27 @@ def save_model(
     logger.info(f"Model saved to {output_path}")
 
 def train_and_save_model(
-    data_path: str,
+    data_path: str = None,
     output_path: str = 'models/churn_model.joblib',
     model_type: str = 'RandomForest',
-    target_col: str = 'lost_program'
+    target_col: str = 'lost_program',
+    df: pd.DataFrame = None
 ) -> None:
     """
     End-to-end function to train and save a churn prediction model.
     
     Args:
-        data_path: Path to the input data CSV
+        data_path: Path to the input data CSV (if None, df must be provided)
         output_path: Path to save the model
         model_type: Type of model to train
         target_col: Name of the target column
+        df: DataFrame with data (if provided, data_path is ignored)
     """
     # Load data
-    df = load_data(data_path)
+    if df is None:
+        if data_path is None:
+            raise ValueError("Either data_path or df must be provided")
+        df = load_data(data_path)
     
     # Preprocess data
     df_processed = preprocess_data(df, target_col=target_col)
@@ -378,4 +383,3 @@ if __name__ == "__main__":
         output_path="models/churn_model.joblib",
         model_type="RandomForest"
     )
-

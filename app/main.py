@@ -20,6 +20,7 @@ from typing import Dict, List, Any, Optional
 from app.schemas.input import ChurnPredictionInput, ChurnPredictionBatchInput
 from app.schemas.output import ChurnPredictionOutput, ChurnPredictionBatchOutput, ChurnReason
 from app.models.model import ChurnModel, get_model
+from app.models.cox_model import CoxChurnModel, get_cox_model
 
 # Configure logging
 logging.basicConfig(
@@ -55,7 +56,7 @@ async def predict_churn(
     model: ChurnModel = Depends(get_model)
 ):
     """
-    Predict churn for a single customer.
+    Predict churn for a single customer using the traditional model.
     
     Returns:
         - Churn probability
@@ -74,13 +75,38 @@ async def predict_churn(
         logger.error(f"Error during prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
+@app.post("/predict/cox", response_model=ChurnPredictionOutput, tags=["Prediction"])
+async def predict_churn_cox(
+    input_data: ChurnPredictionInput,
+    model: CoxChurnModel = Depends(get_cox_model)
+):
+    """
+    Predict churn for a single customer using the Cox proportional hazards model.
+    
+    Returns:
+        - Churn probability
+        - Binary churn prediction
+        - Top churn reasons with impact percentages
+    """
+    try:
+        # Convert input to DataFrame
+        input_df = pd.DataFrame([input_data.dict()])
+        
+        # Make prediction
+        prediction_result = model.predict(input_df)
+        
+        return prediction_result
+    except Exception as e:
+        logger.error(f"Error during Cox prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cox prediction error: {str(e)}")
+
 @app.post("/predict/batch", response_model=ChurnPredictionBatchOutput, tags=["Prediction"])
 async def predict_churn_batch(
     input_data: ChurnPredictionBatchInput,
     model: ChurnModel = Depends(get_model)
 ):
     """
-    Predict churn for multiple customers.
+    Predict churn for multiple customers using the traditional model.
     
     Returns:
         - List of predictions with churn probabilities and reasons
@@ -133,9 +159,68 @@ async def predict_churn_batch(
         logger.error(f"Error during batch prediction: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch prediction error: {str(e)}")
 
+@app.post("/predict/batch/cox", response_model=ChurnPredictionBatchOutput, tags=["Prediction"])
+async def predict_churn_batch_cox(
+    input_data: ChurnPredictionBatchInput,
+    model: CoxChurnModel = Depends(get_cox_model)
+):
+    """
+    Predict churn for multiple customers using the Cox proportional hazards model.
+    
+    Returns:
+        - List of predictions with churn probabilities and reasons
+        - Summary statistics
+    """
+    try:
+        # Convert input to DataFrame
+        input_df = pd.DataFrame([item.dict() for item in input_data.customers])
+        
+        # Make batch predictions
+        predictions = []
+        for i in range(len(input_df)):
+            single_prediction = model.predict(input_df.iloc[[i]])
+            predictions.append(single_prediction)
+        
+        # Calculate summary statistics
+        churn_count = sum(1 for p in predictions if p.churn_prediction)
+        churn_rate = churn_count / len(predictions) if predictions else 0
+        
+        # Aggregate top reasons
+        all_reasons = []
+        for p in predictions:
+            all_reasons.extend(p.churn_reasons)
+        
+        # Count reason frequencies
+        reason_counts = {}
+        for reason in all_reasons:
+            if reason.feature_name in reason_counts:
+                reason_counts[reason.feature_name] += 1
+            else:
+                reason_counts[reason.feature_name] = 1
+        
+        # Sort by frequency
+        top_reasons = [
+            ChurnReason(
+                feature_name=feature,
+                impact_percentage=sum(r.impact_percentage for r in all_reasons if r.feature_name == feature) / reason_counts[feature]
+            )
+            for feature in sorted(reason_counts, key=reason_counts.get, reverse=True)[:5]
+        ]
+        
+        return ChurnPredictionBatchOutput(
+            predictions=predictions,
+            total_customers=len(predictions),
+            churn_count=churn_count,
+            churn_rate=churn_rate,
+            top_reasons=top_reasons
+        )
+    except Exception as e:
+        logger.error(f"Error during Cox batch prediction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cox batch prediction error: {str(e)}")
+
 @app.get("/model/info", tags=["Model"])
 async def model_info(model: ChurnModel = Depends(get_model)):
-    """Get information about the currently loaded model."""
+    """Get information about the currently loaded traditional model."""
     return {
         "model_type": model.model_type,
         "features": model.feature_names,
@@ -143,7 +228,17 @@ async def model_info(model: ChurnModel = Depends(get_model)):
         "last_trained": model.last_trained,
     }
 
+@app.get("/model/cox/info", tags=["Model"])
+async def cox_model_info(model: CoxChurnModel = Depends(get_cox_model)):
+    """Get information about the currently loaded Cox model."""
+    return {
+        "model_type": "Cox Proportional Hazards",
+        "features": model.numerical_cols + model.categorical_cols,
+        "model_metrics": model.metrics,
+        "duration_column": model.duration_col,
+        "event_column": model.event_col,
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
-
