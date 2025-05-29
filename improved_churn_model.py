@@ -25,12 +25,13 @@ class ImprovedChurnModel:
     def preprocess_data(self, df, missing_threshold=80, zero_threshold=80):
         logging.info("Preprocessing data...")
         
+        # List of important features that should not be removed
+        important_features = ['lost_program', 'days_rem_to_end_contract', 'startDate', 'endDate', 'last_activity_date']
+        
         # Remove data leakage columns
-        leakage_columns = ['churn_date', 'days_since_last_activity']
+        leakage_columns = ['churn_date']
         id_columns = ['datalakeProgramId']
-        date_columns = [col for col in df.columns if 'date' in col.lower()]
-        keep_date_cols = ['startDate', 'endDate', 'last_activity_date']
-        date_columns = [col for col in date_columns if col not in keep_date_cols]
+        date_columns = [col for col in df.columns if 'date' in col.lower() and col not in important_features]
         
         drop_columns = leakage_columns + id_columns + date_columns
         df = df.drop(columns=[col for col in drop_columns if col in df.columns])
@@ -43,12 +44,12 @@ class ImprovedChurnModel:
         
         # Remove columns with high missing values
         missing_values = df.isnull().mean() * 100
-        high_missing_cols = missing_values[missing_values > missing_threshold].index.tolist()
+        high_missing_cols = [col for col in missing_values[missing_values > missing_threshold].index if col not in important_features]
         df = df.drop(columns=high_missing_cols)
         
         # Remove columns with high zero values
         zero_values = (df == 0).mean() * 100
-        high_zero_cols = zero_values[zero_values > zero_threshold].index.tolist()
+        high_zero_cols = [col for col in zero_values[zero_values > zero_threshold].index if col not in important_features]
         df = df.drop(columns=high_zero_cols)
         
         logging.info(f"Removed {len(high_missing_cols)} columns with >{missing_threshold}% missing values")
